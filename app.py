@@ -82,13 +82,13 @@ def login(email_alias, code):
         "loginType": 0,
         "verifyCode": code,
         "password": "526a97afaa842892fa91dcc5f9a23d91",
-        "channel": "vsagoxch3o"
+        "channel": "vsagq956gu"
     }
     headers = {
         "accept": "*/*",
         "appversion": "1009001",
         "clienttype": "web",
-        "channel": "vsagoxch3o",
+        "channel": "vsagq956gu",
         "content-type": "application/json",
         "user-agent": "Mozilla/5.0",
         "userid": "0"
