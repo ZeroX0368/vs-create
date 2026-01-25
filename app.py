@@ -24,7 +24,7 @@ def delay(): time.sleep(1)
 def get_random_password():
     return ''.join(random.choices(string.digits, k=6))
 
-# --- CÁC HÀM HỖ TRỢ ĐÃ CÓ ---
+# --- CÁC HÀM HỖ TRỢ HỆ THỐNG MAIL ---
 def get_mail_domain():
     while True:
         try:
@@ -48,7 +48,58 @@ def create_mail_account(password):
             delay()
         except: delay()
 
-# --- API CHÍNH ---
+def gen_email_alias():
+    suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    return f"{EMAIL_USERNAME}+{suffix}@{EMAIL_DOMAIN}"
+
+# --- CÁC HÀM TƯƠNG TÁC VSPHONE ---
+def send_sms(email_alias):
+    data = {
+        "smsType": 2,
+        "mobilePhone": email_alias,
+        "captchaVerifyParam": json.dumps({"data": ""})
+    }
+    while True:
+        try:
+            r = requests.post("https://api.vsphone.com/vsphone/api/sms/smsSend", json=data, headers=VSPHONE_HEADERS)
+            if r.status_code == 200: return
+            delay()
+        except: delay()
+
+def wait_for_code(alias):
+    headers = {"Authorization": f"Bearer {MAIL_TOKEN}"}
+    while True:
+        try:
+            msgs = requests.get("https://api.mail.tm/messages", headers=headers).json().get("hydra:member", [])
+            for m in msgs:
+                recipients = [to['address'] for to in m.get("to", [])]
+                if any(alias.lower() == to.lower() for to in recipients) and "VSPhone" in m["subject"]:
+                    msg = requests.get(f"https://api.mail.tm/messages/{m['id']}", headers=headers).json()
+                    for line in msg.get("text", "").splitlines():
+                        if line.strip().isdigit() and len(line.strip()) == 6:
+                            return line.strip()
+            delay()
+        except: delay()
+
+def login_vs(email_alias, code, password):
+    pass_md5 = hashlib.md5(password.encode()).hexdigest()
+    payload = {
+        "mobilePhone": email_alias,
+        "loginType": 0,
+        "verifyCode": code,
+        "password": pass_md5,
+        "channel": "vsagq956gu"
+    }
+    while True:
+        try:
+            r = requests.post("https://api.vsphone.com/vsphone/api/user/login", json=payload, headers=VSPHONE_HEADERS)
+            if r.status_code == 200 and "data" in r.json():
+                d = r.json()["data"]
+                return d["userId"], d["token"]
+            delay()
+        except: delay()
+
+# --- ENDPOINTS API ---
 
 @app.route("/", methods=["GET"])
 def create_account():
@@ -58,13 +109,10 @@ def create_account():
         if MAIL_TOKEN is None:
             create_mail_account(current_password)
 
-        alias = f"{EMAIL_USERNAME}+{''.join(random.choices(string.digits, k=4))}@{EMAIL_DOMAIN}"
-        
-        # Gửi SMS & Đợi code (Giả định các hàm send_sms, wait_for_code, login đã có logic như cũ)
-        # Ở đây mình viết gọn lại để tập trung vào phần /buy
+        alias = gen_email_alias()
         send_sms(alias)
         code = wait_for_code(alias)
-        uid, user_token = login(alias, code, current_password)
+        uid, user_token = login_vs(alias, code, current_password)
 
         return jsonify({
             "email": alias,
@@ -81,15 +129,15 @@ def buy_trial():
     password = request.args.get("password")
 
     if not email or not password:
-        return jsonify({"error": "Missing email or password"}), 400
+        return jsonify({"error": "Thiếu email hoặc password"}), 400
 
     try:
-        # Bước 1: Login để lấy Token (Sử dụng mật khẩu đã hash MD5)
+        # Bước 1: Login để lấy token mua hàng
         pass_md5 = hashlib.md5(password.encode()).hexdigest()
         login_payload = {
             "mobilePhone": email,
             "password": pass_md5,
-            "loginType": 1, # Thường login bằng pass là type 1
+            "loginType": 1, 
             "channel": "vsagq956gu"
         }
         
@@ -99,37 +147,28 @@ def buy_trial():
         if login_res.get("code") != 200:
             return jsonify({"success": False, "message": "Login failed", "details": login_res}), 401
         
-        user_token = login_res["data"]["token"]
-        user_id = login_res["data"]["userId"]
+        token = login_res["data"]["token"]
+        userid = login_res["data"]["userId"]
 
-        # Bước 2: Gọi API mua gói VIP Trial
-        # Gói trial thường miễn phí (0đ) hoặc dùng point/coupon
-        buy_headers = VSPHONE_HEADERS.copy()
-        buy_headers["token"] = user_token
-        buy_headers["userid"] = str(user_id)
-
-        # Endpoint mua hàng (Đây là endpoint giả định dựa trên cấu trúc VSPhone)
-        buy_payload = {
-            "goodId": 1,      # ID của gói Trial VIP (Bạn cần check chính xác ID này)
-            "payType": 5,     # 5 thường là hình thức thanh toán nội bộ/free
-            "buyNum": 1
-        }
-
+        # Bước 2: Request mua gói VIP Trial
+        headers = VSPHONE_HEADERS.copy()
+        headers.update({"token": token, "userid": str(userid)})
+        
+        # ID 1 thường là gói Trial 1 ngày hoặc gói dùng thử
+        buy_payload = {"goodId": 1, "payType": 5, "buyNum": 1}
+        
         buy_res = requests.post("https://api.vsphone.com/vsphone/api/order/createOrder", 
-                                 json=buy_payload, headers=buy_headers).json()
+                                 json=buy_payload, headers=headers).json()
 
         return jsonify({
             "success": True,
             "email": email,
-            "order_status": buy_res.get("message", "Processed"),
-            "raw_response": buy_res
+            "status": buy_res.get("message", "Nhiệm vụ hoàn tất"),
+            "data": buy_res
         })
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
-
-# Giữ nguyên các hàm send_sms, wait_for_code, login từ code cũ của bạn...
-# [Paste các hàm đó vào đây]
 
 if __name__ == "__main__":
     app.run(debug=True, port=5001)
