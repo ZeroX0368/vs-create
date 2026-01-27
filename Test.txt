@@ -1,0 +1,269 @@
+Update quét OTP 6 số ví dụ 294672 cải thiện inbox mail
+Const cybertemp-apikey = 'tk_888edc4ffa2a7b4e0235d026c7546f24ec998dc59537de317386ff7cb0126593'
+async function getEmails(email, apiKey = null, limit = 25, offset = 0) { const headers = apiKey ? { 'X-API-KEY': apiKey } : {}; const params = new URLSearchParams({ email }); if (limit !== 25) params.append('limit', limit.toString()); if (offset > 0) params.append('offset', offset.toString()); const url = https://api.cybertemp.xyz/getMail?${params}; const response = await fetch(url, { headers }
+GET /getDomains?tld_include=com,net&tld_exclude=xyz&type=discord
+X-API-KEY: your_api_key_here
+GET /getMail?email=test@example.com&limit=50&offset=100
+X-API-KEY: your_api_key_here
+GET /getDomains?limit=15&offset=0&type=discord
+X-API-KEY: your_api_key_here
+
+import type { Express } from "express";
+import { createServer, type Server } from "http";
+import { storage } from "./storage";
+import { api } from "@shared/routes";
+import { createHash } from "crypto";
+import { z } from "zod";
+
+const CYBERTEMP_API_KEY = "tk_888edc4ffa2a7b4e0235d026c7546f24ec998dc59537de317386ff7cb0126593";
+
+function delay(ms: number) {
+return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getRandomPassword() {
+return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+function generateEmailUsername() {
+const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+let result = "";
+for (let i = 0; i < 10; i++) {
+result += chars.charAt(Math.floor(Math.random() * chars.length));
+}
+return result;
+}
+
+async function createCyberTempEmail() {
+try {
+// 1. Get available domains
+const domainsUrl = "https://api.cybertemp.xyz/getDomains?tld_include=com,net&tld_exclude=xyz&type=discord";
+const domainsRes = await fetch(domainsUrl, {
+headers: { "X-API-KEY": CYBERTEMP_API_KEY }
+});
+
+if (!domainsRes.ok) {
+
+throw new Error(`CyberTemp getDomains failed: ${domainsRes.status}`);
+
+}
+
+const domainsData = await domainsRes.json();
+
+const domains = domainsData.domains || domainsData;
+
+if (!Array.isArray(domains) || domains.length === 0) {
+
+throw new Error("No domains available from CyberTemp");
+
+}
+
+const domain = domains[0].domain || domains[0];
+
+const username = generateEmailUsername();
+
+const email = `${username}@${domain}`;
+
+return { email };
+
+} catch (error: any) {
+console.error("CyberTemp error:", error);
+throw error;
+}
+}
+
+async function checkCyberTempInbox(email: string) {
+try {
+const params = new URLSearchParams({ email, limit: "50" });
+const url = https://api.cybertemp.xyz/getMail?${params};
+
+const response = await fetch(url, {
+
+headers: { "X-API-KEY": CYBERTEMP_API_KEY }
+
+});
+
+if (!response.ok) throw new Error(`CyberTemp inbox failed: ${response.status}`);
+
+const data = await response.json();
+
+return data.mails || data.messages || data || [];
+
+} catch (error) {
+console.error("CyberTemp inbox error:", error);
+throw error;
+}
+}
+
+async function sendSms(emailAlias: string) {
+const data = {
+smsType: 2,
+mobilePhone: emailAlias,
+captchaVerifyParam: JSON.stringify({ data: "" })
+};
+
+const response = await fetch("https://api.vsphone.com/vsphone/api/sms/smsSend", {
+method: "POST",
+headers: { "Content-Type": "application/json" },
+body: JSON.stringify(data)
+});
+
+if (response.status !== 200) throw new Error(VSPhone request failed: ${response.status});
+}
+
+async function loginVsPhone(emailAlias: string, code: string, password: string) {
+const passMd5 = createHash("md5").update(password).digest("hex");
+const payload = {
+mobilePhone: emailAlias,
+loginType: 0,
+verifyCode: code,
+password: passMd5,
+channel: "vsagq956gu"
+};
+
+const response = await fetch("https://api.vsphone.com/vsphone/api/user/login", {
+method: "POST",
+headers: {
+"accept": "/",
+"appversion": "1009001",
+"clienttype": "web",
+"channel": "vsagq956gu",
+"content-type": "application/json",
+"user-agent": "Mozilla/5.0",
+"userid": "0"
+},
+body: JSON.stringify(payload)
+});
+
+const data = await response.json();
+if (response.status === 200 && data.data) {
+return { userId: data.data.userId, token: data.data.token };
+} else {
+throw new Error(Login failed: ${data.message || JSON.stringify(data)});
+}
+}
+
+async function processRegistration(regId: number) {
+try {
+await storage.addLog(regId, "Starting registration (CyberTemp)...");
+const password = getRandomPassword();
+await storage.updateRegistration(regId, { password });
+
+await storage.addLog(regId, "Creating CyberTemp email...");
+
+const emailObj = await createCyberTempEmail();
+
+const email = emailObj.email;
+
+await storage.updateRegistration(regId, { email });
+
+await storage.addLog(regId, `Email created: ${email}`);
+
+await storage.addLog(regId, "Requesting VSPhone OTP...");
+
+await sendSms(email);
+
+await storage.addLog(regId, "OTP request sent. Polling CyberTemp inbox...");
+
+let code: string | null = null;
+
+let attempts = 0;
+
+while (attempts < 40) {
+
+await delay(3000);
+
+try {
+
+const messages = await checkCyberTempInbox(email);
+
+if (Array.isArray(messages)) {
+
+for (const m of messages) {
+
+const subject = (m.subject || "").toString();
+
+const body = (m.text || m.body || m.snippet || m.html || m.content || "").toString();
+
+const combined = `${subject} ${body}`;
+
+// Look specifically for 6-digit OTP codes (e.g., 294672)
+
+const match = combined.match(/\b\d{6}\b/);
+
+if (match) {
+
+code = match[0];
+
+break;
+
+}
+
+}
+
+}
+
+if (code) break;
+
+attempts++;
+
+} catch (e) {
+
+console.error("Polling error:", e);
+
+}
+
+}
+
+if (!code) {
+
+throw new Error("Timeout: 6-digit OTP code not received from CyberTemp after 2 minutes.");
+
+}
+
+await storage.addLog(regId, `OTP received: ${code}. Completing registration...`);
+
+const loginResult = await loginVsPhone(email, code, password);
+
+await storage.updateRegistration(regId, {
+
+userId: loginResult.userId,
+
+token: loginResult.token,
+
+status: "success"
+
+});
+
+await storage.addLog(regId, "Registration successful! Final credentials saved.");
+
+} catch (error: any) {
+await storage.addLog(regId, Error: ${error.message});
+await storage.updateRegistration(regId, { status: "failed", error: error.message });
+}
+}
+
+export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+app.post(api.registrations.create.path, async (req, res) => {
+const registration = await storage.createRegistration({
+email: "initializing...",
+password: "...",
+status: "pending",
+logs: ["Process started"]
+});
+processRegistration(registration.id).catch(err => console.error("Process error:", err));
+res.status(201).json(registration);
+});
+
+app.get(api.registrations.get.path, async (req, res) => {
+const reg = await storage.getRegistration(parseInt(req.params.id));
+reg ? res.json(reg) : res.status(404).json({ message: "Not found" });
+});
+
+app.get(api.registrations.list.path, async (req, res) => {
+res.json(await storage.listRegistrations());
+});
+
+return httpServer;
+}
+
